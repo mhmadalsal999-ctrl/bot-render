@@ -9,7 +9,7 @@ import {
   getUserSeries,
 } from "../../db/supabase.js";
 import { generateAndPublishNow, processEpisode } from "../../pipeline/index.js";
-import { mainMenuKeyboard, seriesListKeyboard, episodeActionsKeyboard } from "../keyboards.js";
+import { mainMenuKeyboard, seriesListKeyboard } from "../keyboards.js";
 import { logger } from "../../lib/logger.js";
 
 export async function handleGenerateEpisodeStart(ctx: Context): Promise<void> {
@@ -17,10 +17,7 @@ export async function handleGenerateEpisodeStart(ctx: Context): Promise<void> {
   const series = await getUserSeries(userId);
 
   if (series.length === 0) {
-    await ctx.reply(
-      "❌ لا توجد مسلسلات! أنشئ مسلسلاً أولاً.",
-      mainMenuKeyboard()
-    );
+    await ctx.reply("❌ لا توجد مسلسلات! أنشئ مسلسلاً أولاً.", mainMenuKeyboard());
     return;
   }
 
@@ -30,15 +27,10 @@ export async function handleGenerateEpisodeStart(ctx: Context): Promise<void> {
   }
 
   await setUserState(userId, "selecting_series_for_episode", {});
-  await ctx.reply(
-    "🎬 *توليد حلقة جديدة*\n\nاختر المسلسل:",
-    {
-      parse_mode: "Markdown",
-      ...seriesListKeyboard(
-        series.map((s) => ({ id: s.id, title: s.title, status: s.status }))
-      ),
-    }
-  );
+  await ctx.reply("🎬 *توليد حلقة جديدة*\n\nاختر المسلسل:", {
+    parse_mode: "Markdown",
+    ...seriesListKeyboard(series.map((s) => ({ id: s.id, title: s.title, status: s.status }))),
+  });
 }
 
 export async function handleEpisodeSeriesSelected(ctx: Context, text: string): Promise<void> {
@@ -61,8 +53,7 @@ async function startEpisodeGeneration(ctx: Context, seriesId: number): Promise<v
   }
 
   const progressMsg = await ctx.reply(
-    `🎬 *جاري توليد حلقة من "${series.title}"*\n\n` +
-      `📝 كتابة السيناريو...`,
+    `🎬 *جاري توليد حلقة من "${series.title}"*\n\n📝 كتابة السيناريو...`,
     { parse_mode: "Markdown" }
   );
 
@@ -71,18 +62,15 @@ async function startEpisodeGeneration(ctx: Context, seriesId: number): Promise<v
   try {
     const result = await generateAndPublishNow(seriesId, async (step: string) => {
       steps.push(step);
-      const progress = steps.join("\n") + "\n⏳ جاري العمل...";
       try {
         await ctx.telegram.editMessageText(
           progressMsg.chat.id,
           progressMsg.message_id,
           undefined,
-          `🎬 *توليد حلقة: ${series.title}*\n\n${progress}`,
+          `🎬 *توليد حلقة: ${series.title}*\n\n${steps.join("\n")}\n⏳ جاري العمل...`,
           { parse_mode: "Markdown" }
         );
-      } catch {
-        // ignore edit errors
-      }
+      } catch { /* ignore edit errors */ }
     });
 
     if (result.success && result.youtubeUrl) {
@@ -90,21 +78,15 @@ async function startEpisodeGeneration(ctx: Context, seriesId: number): Promise<v
         progressMsg.chat.id,
         progressMsg.message_id,
         undefined,
-        `✅ *تم نشر الحلقة بنجاح على يوتيوب!*\n\n` +
-          `🎬 *${series.title}*\n` +
-          `🔗 [شاهد على يوتيوب](${result.youtubeUrl})\n\n` +
-          steps.map((s) => s.replace("⏳", "✅")).join("\n"),
-        { parse_mode: "Markdown", disable_web_page_preview: false }
+        `✅ *تم نشر الحلقة بنجاح على يوتيوب!*\n\n🎬 *${series.title}*\n🔗 ${result.youtubeUrl}\n\n${steps.map((s) => s.replace("⏳", "✅")).join("\n")}`,
+        { parse_mode: "Markdown" }
       );
-    } else if (result.success && result.youtubeSkipped) {
+    } else if (result.success) {
       await ctx.telegram.editMessageText(
         progressMsg.chat.id,
         progressMsg.message_id,
         undefined,
-        `✅ *تم توليد الحلقة بنجاح!*\n\n` +
-          `🎬 *${series.title}*\n\n` +
-          steps.map((s) => s.replace("⏳", "✅")).join("\n") +
-          `\n\n📌 _الرفع على يوتيوب سيكون متاحاً بعد إضافة بيانات يوتيوب_`,
+        `✅ *تم توليد الحلقة بنجاح!*\n\n🎬 *${series.title}*\n\n${steps.map((s) => s.replace("⏳", "✅")).join("\n")}\n\n📌 _الرفع على يوتيوب سيكون متاحاً بعد إضافة بيانات يوتيوب_`,
         { parse_mode: "Markdown" }
       );
     } else {
@@ -118,17 +100,11 @@ async function startEpisodeGeneration(ctx: Context, seriesId: number): Promise<v
     }
   } catch (err) {
     logger.error({ err }, "Episode generation failed");
-    await ctx.reply(
-      "❌ حدث خطأ أثناء توليد الحلقة. تأكد من مفاتيح API وحاول مجدداً.",
-      mainMenuKeyboard()
-    );
+    await ctx.reply("❌ حدث خطأ أثناء توليد الحلقة.", mainMenuKeyboard());
   }
 }
 
-export async function handleGenerateEpisodeCallback(
-  ctx: Context,
-  seriesId: number
-): Promise<void> {
+export async function handleGenerateEpisodeCallback(ctx: Context, seriesId: number): Promise<void> {
   await ctx.answerCbQuery("⏳ جاري بدء التوليد...");
   await startEpisodeGeneration(ctx, seriesId);
 }
@@ -140,54 +116,30 @@ export async function handleListEpisodes(ctx: Context, seriesId: number): Promis
   const episodes = await getSeriesEpisodes(seriesId);
 
   if (episodes.length === 0) {
-    await ctx.editMessageText(
-      `📋 *حلقات: ${series.title}*\n\nلا توجد حلقات بعد.`,
-      {
-        parse_mode: "Markdown",
-      }
-    );
+    await ctx.editMessageText(`📋 *حلقات: ${series.title}*\n\nلا توجد حلقات بعد.`, {
+      parse_mode: "Markdown",
+    });
     return;
   }
 
-  const statusIcon = (s: string) => {
-    const icons: Record<string, string> = {
-      pending: "⏳",
-      generating: "🔄",
-      ready: "✅",
-      published: "📺",
-      failed: "❌",
-    };
-    return icons[s] || "❓";
-  };
+  const statusIcon = (s: string) =>
+    ({ pending: "⏳", generating: "🔄", ready: "✅", published: "📺", failed: "❌" }[s] || "❓");
 
   const list = episodes
     .slice(0, 15)
-    .map(
-      (ep) =>
-        `${statusIcon(ep.status)} الحلقة ${ep.episode_number}: ${ep.title || "بدون عنوان"}` +
-        (ep.youtube_url ? ` [▶️](${ep.youtube_url})` : "")
-    )
+    .map((ep) => `${statusIcon(ep.status)} الحلقة ${ep.episode_number}: ${ep.title || "بدون عنوان"}`)
     .join("\n");
 
-  const pendingCount = episodes.filter((e) => e.status === "pending").length;
   const publishedCount = episodes.filter((e) => e.status === "published").length;
+  const pendingCount = episodes.filter((e) => e.status === "pending").length;
 
   await ctx.editMessageText(
-    `📋 *حلقات: ${series.title}*\n\n` +
-      `📊 منشورة: ${publishedCount} | جاهزة: ${pendingCount}\n\n` +
-      list +
-      (episodes.length > 15 ? `\n\n_...و ${episodes.length - 15} حلقة أخرى_` : ""),
-    {
-      parse_mode: "Markdown",
-      disable_web_page_preview: true,
-    }
+    `📋 *حلقات: ${series.title}*\n\n📊 منشورة: ${publishedCount} | جاهزة: ${pendingCount}\n\n${list}`,
+    { parse_mode: "Markdown" }
   );
 }
 
-export async function handlePublishEpisode(
-  ctx: Context,
-  episodeId: number
-): Promise<void> {
+export async function handlePublishEpisode(ctx: Context, episodeId: number): Promise<void> {
   await ctx.answerCbQuery("⏳ جاري النشر...");
 
   const episode = await getEpisode(episodeId);
@@ -196,27 +148,20 @@ export async function handlePublishEpisode(
     return;
   }
 
-  const msg = await ctx.reply(
-    `📤 جاري نشر الحلقة ${episode.episode_number}...`,
-    { parse_mode: "Markdown" }
-  );
+  const msg = await ctx.reply(`📤 جاري نشر الحلقة ${episode.episode_number}...`);
 
   try {
     const result = await processEpisode(episode.series_id, episodeId);
 
     if (result.success && result.youtubeUrl) {
       await ctx.telegram.editMessageText(
-        msg.chat.id,
-        msg.message_id,
-        undefined,
-        `✅ *تم النشر!*\n\n🔗 [شاهد على يوتيوب](${result.youtubeUrl})`,
+        msg.chat.id, msg.message_id, undefined,
+        `✅ *تم النشر!*\n\n🔗 ${result.youtubeUrl}`,
         { parse_mode: "Markdown" }
       );
     } else {
       await ctx.telegram.editMessageText(
-        msg.chat.id,
-        msg.message_id,
-        undefined,
+        msg.chat.id, msg.message_id, undefined,
         `❌ فشل النشر: ${result.error || "خطأ غير معروف"}`,
         { parse_mode: "Markdown" }
       );
@@ -233,18 +178,17 @@ export async function handleStats(ctx: Context): Promise<void> {
 
   let totalEpisodes = 0;
   let publishedEpisodes = 0;
-
   for (const s of series) {
     totalEpisodes += s.total_episodes;
     publishedEpisodes += s.episodes_generated;
   }
 
-  const stats =
+  await ctx.reply(
     `📊 *إحصائياتك*\n\n` +
     `📺 المسلسلات: ${series.length}\n` +
     `🎬 إجمالي الحلقات: ${totalEpisodes}\n` +
     `✅ الحلقات المنشورة: ${publishedEpisodes}\n` +
-    `🔄 نشر تلقائي مفعّل: ${series.filter((s) => s.auto_publish).length} مسلسل`;
-
-  await ctx.reply(stats, { parse_mode: "Markdown", ...mainMenuKeyboard() });
+    `🔄 نشر تلقائي مفعّل: ${series.filter((s) => s.auto_publish).length} مسلسل`,
+    { parse_mode: "Markdown", ...mainMenuKeyboard() }
+  );
 }
