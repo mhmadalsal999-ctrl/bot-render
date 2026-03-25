@@ -1,6 +1,6 @@
-import { Telegraf, session } from "telegraf";
-import type { Context } from "telegraf";
-import { getUserState, setUserState, clearUserState } from "../db/supabase.js";
+import { Telegraf, type Context } from "telegraf";
+import { logger } from "../lib/logger.js";
+import { getUserState, clearUserState } from "../db/supabase.js";
 import {
   handleMySeriesList,
   handleSeriesSelection,
@@ -20,238 +20,187 @@ import {
   handleStats,
 } from "./handlers/episode.js";
 import { mainMenuKeyboard } from "./keyboards.js";
-import { logger } from "../lib/logger.js";
 
-const BOT_TOKEN = process.env["TELEGRAM_BOT_TOKEN"] || "placeholder_token";
+const BOT_TOKEN = process.env["TELEGRAM_BOT_TOKEN"];
+
+if (!BOT_TOKEN) {
+  throw new Error("TELEGRAM_BOT_TOKEN is required");
+}
 
 export const bot = new Telegraf(BOT_TOKEN);
 
-const WELCOME_MESSAGE = `
-🎬 *مرحباً بك في بوت توليد المسلسلات!*
-
-أنا بوت يساعدك على إنشاء مسلسلات أنيميشن كاملة بالذكاء الاصطناعي ونشرها تلقائياً على يوتيوب!
-
-*ما يمكنني فعله:*
-✅ كتابة سيناريو كامل لمسلسلك
-🎙️ توليد صوت احترافي لكل حلقة
-🎨 توليد مشاهد مرئية بالذكاء الاصطناعي
-🎬 تجميع فيديو كامل تلقائياً
-📺 نشر تلقائي يومي على يوتيوب
-
-*ابدأ الآن:*
-`;
+// ─── Start & Help ─────────────────────────────────────────────────────────
 
 bot.start(async (ctx) => {
-  const userId = String(ctx.from.id);
-  await clearUserState(userId);
-  await ctx.reply(WELCOME_MESSAGE, {
-    parse_mode: "Markdown",
-    ...mainMenuKeyboard(),
-  });
+  const name = ctx.from?.first_name || "صديقي";
+  await ctx.reply(
+    `🎬 *أهلاً ${name}!*\n\n` +
+      `أنا بوت إنشاء مسلسلات الأنيميشن بالذكاء الاصطناعي 🤖\n\n` +
+      `يمكنني:\n` +
+      `• ✍️ كتابة السيناريو الكامل\n` +
+      `• 🎙️ توليد الصوت بـ ElevenLabs\n` +
+      `• 🎨 إنشاء مشاهد الأنيميشن\n` +
+      `• 🎬 تجميع الفيديو تلقائياً\n` +
+      `• 📺 النشر على يوتيوب\n\n` +
+      `ابدأ بإنشاء أول مسلسل لك! 🚀`,
+    { parse_mode: "Markdown", ...mainMenuKeyboard() }
+  );
 });
 
 bot.help(async (ctx) => {
   await ctx.reply(
     `❓ *المساعدة*\n\n` +
-      `📺 *مسلسلاتي* - عرض كل مسلسلاتك\n` +
-      `➕ *إنشاء مسلسل جديد* - إنشاء مسلسل جديد بسيناريو كامل\n` +
-      `🎬 *توليد حلقة الآن* - توليد ونشر حلقة على الفور\n` +
-      `📊 *الإحصائيات* - إحصائيات قناتك\n` +
-      `⚙️ *الإعدادات* - إعدادات البوت\n\n` +
-      `🔄 *النشر التلقائي*: يمكن تفعيل النشر التلقائي اليومي من إعدادات كل مسلسل`,
+      `📺 *مسلسلاتي* - عرض وإدارة مسلسلاتك\n` +
+      `➕ *إنشاء مسلسل* - إنشاء مسلسل جديد\n` +
+      `🎬 *توليد حلقة* - توليد ونشر حلقة الآن\n` +
+      `📊 *الإحصائيات* - إحصائيات مسلسلاتك\n\n` +
+      `⚙️ *المتطلبات:*\n` +
+      `• مفتاح GROQ API لكتابة السيناريو\n` +
+      `• مفتاح ElevenLabs للصوت\n` +
+      `• مفتاح HuggingFace للصور\n` +
+      `• بيانات يوتيوب للنشر`,
     { parse_mode: "Markdown", ...mainMenuKeyboard() }
   );
 });
 
-bot.command("cancel", async (ctx) => {
-  const userId = String(ctx.from.id);
-  await clearUserState(userId);
-  await ctx.reply("✅ تم الإلغاء", mainMenuKeyboard());
-});
+// ─── Text messages ────────────────────────────────────────────────────────
 
 bot.on("text", async (ctx) => {
-  const userId = String(ctx.from.id);
   const text = ctx.message.text;
+  const userId = String(ctx.from?.id);
 
-  if (text === "❌ إلغاء") {
-    await clearUserState(userId);
-    await ctx.reply("✅ تم الإلغاء", mainMenuKeyboard());
-    return;
-  }
-
-  if (text === "🔙 رجوع") {
-    await clearUserState(userId);
-    await ctx.reply("القائمة الرئيسية", mainMenuKeyboard());
-    return;
-  }
-
+  // Main menu buttons
   if (text === "📺 مسلسلاتي") {
-    await clearUserState(userId);
     await handleMySeriesList(ctx);
     return;
   }
-
   if (text === "➕ إنشاء مسلسل جديد") {
-    await clearUserState(userId);
     await handleCreateSeriesStart(ctx);
     return;
   }
-
   if (text === "🎬 توليد حلقة الآن") {
-    await clearUserState(userId);
     await handleGenerateEpisodeStart(ctx);
     return;
   }
-
   if (text === "📊 الإحصائيات") {
-    await clearUserState(userId);
     await handleStats(ctx);
     return;
   }
-
-  if (text === "⚙️ الإعدادات") {
-    await clearUserState(userId);
-    await ctx.reply(
-      "⚙️ *الإعدادات*\n\nاختر مسلسلاً لإدارة إعداداته من قائمة مسلسلاتك.",
-      { parse_mode: "Markdown", ...mainMenuKeyboard() }
-    );
-    return;
-  }
-
   if (text === "❓ المساعدة") {
-    await bot.handleUpdate({ update_id: 0, message: ctx.message });
+    await ctx.reply("اضغط /help للمساعدة.");
+    return;
+  }
+  if (text === "❌ إلغاء" || text === "🔙 رجوع") {
+    await clearUserState(userId);
+    await ctx.reply("✅ تم الإلغاء.", mainMenuKeyboard());
     return;
   }
 
+  // Check user state for multi-step flows
   const userState = await getUserState(userId);
-
   if (!userState || userState.state === "idle") {
-    const seriesMatch = text.match(/^[✅⏸️🏁] .+ \(#(\d+)\)$/);
-    if (seriesMatch) {
-      const seriesId = parseInt(seriesMatch[1]!);
-      await handleSeriesSelection(ctx, seriesId);
-      return;
-    }
-
     await ctx.reply("اختر من القائمة:", mainMenuKeyboard());
     return;
   }
 
-  if (
-    [
-      "creating_series_title",
-      "creating_series_genre",
-      "creating_series_description",
-      "creating_series_episodes",
-    ].includes(userState.state)
-  ) {
+  const state = userState.state;
+
+  if (state.startsWith("creating_series")) {
     await handleCreateSeriesStep(ctx, text);
     return;
   }
 
-  if (userState.state === "selecting_series_for_episode") {
+  if (state === "selecting_series_for_episode") {
     await handleEpisodeSeriesSelected(ctx, text);
     return;
   }
-
-  await ctx.reply("اختر من القائمة:", mainMenuKeyboard());
 });
+
+// ─── Callback queries ─────────────────────────────────────────────────────
 
 bot.on("callback_query", async (ctx) => {
   if (!("data" in ctx.callbackQuery)) return;
   const data = ctx.callbackQuery.data;
 
-  try {
-    if (data.startsWith("gen_ep_")) {
-      const seriesId = parseInt(data.replace("gen_ep_", ""));
-      await handleGenerateEpisodeCallback(ctx, seriesId);
-      return;
-    }
-
-    if (data.startsWith("list_eps_")) {
-      const seriesId = parseInt(data.replace("list_eps_", ""));
-      await handleListEpisodes(ctx, seriesId);
-      return;
-    }
-
-    if (data.startsWith("series_info_")) {
-      const seriesId = parseInt(data.replace("series_info_", ""));
-      await ctx.answerCbQuery();
-      await handleSeriesSelection(ctx, seriesId);
-      return;
-    }
-
-    if (data.startsWith("series_settings_")) {
-      const seriesId = parseInt(data.replace("series_settings_", ""));
-      await ctx.answerCbQuery();
-      await handleSeriesSettings(ctx, seriesId);
-      return;
-    }
-
-    if (data.startsWith("toggle_auto_")) {
-      const seriesId = parseInt(data.replace("toggle_auto_", ""));
-      await handleToggleAutoPublish(ctx, seriesId);
-      return;
-    }
-
-    if (data.startsWith("change_voice_")) {
-      const seriesId = parseInt(data.replace("change_voice_", ""));
-      await ctx.answerCbQuery();
-      await handleVoiceChange(ctx, seriesId);
-      return;
-    }
-
-    if (data.startsWith("set_voice_")) {
-      const parts = data.replace("set_voice_", "").split("_");
-      const seriesId = parseInt(parts[0]!);
-      const voiceId = parts.slice(1).join("_");
-      await handleSetVoice(ctx, seriesId, voiceId);
-      return;
-    }
-
-    if (data.startsWith("publish_ep_")) {
-      const episodeId = parseInt(data.replace("publish_ep_", ""));
-      await handlePublishEpisode(ctx, episodeId);
-      return;
-    }
-
-    if (data.startsWith("delete_series_")) {
-      const seriesId = parseInt(data.replace("delete_series_", ""));
-      await ctx.answerCbQuery();
-      await ctx.editMessageText(
-        "⚠️ هل أنت متأكد من حذف المسلسل؟ لا يمكن التراجع!",
-        {
-          parse_mode: "Markdown",
-        }
-      );
-      return;
-    }
-
-    await ctx.answerCbQuery("⚠️ أمر غير معروف");
-  } catch (err) {
-    logger.error({ err, data }, "Callback query error");
-    try {
-      await ctx.answerCbQuery("❌ حدث خطأ");
-    } catch {
-      // ignore
-    }
+  // Generate episode
+  const genEp = data.match(/^gen_ep_(\d+)$/);
+  if (genEp) {
+    await handleGenerateEpisodeCallback(ctx, parseInt(genEp[1]!));
+    return;
   }
+
+  // List episodes
+  const listEps = data.match(/^list_eps_(\d+)$/);
+  if (listEps) {
+    await handleListEpisodes(ctx, parseInt(listEps[1]!));
+    return;
+  }
+
+  // Publish episode
+  const publishEp = data.match(/^publish_ep_(\d+)$/);
+  if (publishEp) {
+    await handlePublishEpisode(ctx, parseInt(publishEp[1]!));
+    return;
+  }
+
+  // Series info
+  const seriesInfo = data.match(/^series_info_(\d+)$/);
+  if (seriesInfo) {
+    await handleSeriesSelection(ctx, parseInt(seriesInfo[1]!));
+    return;
+  }
+
+  // Series settings
+  const seriesSettings = data.match(/^series_settings_(\d+)$/);
+  if (seriesSettings) {
+    await handleSeriesSettings(ctx, parseInt(seriesSettings[1]!));
+    return;
+  }
+
+  // Toggle auto publish
+  const toggleAuto = data.match(/^toggle_auto_(\d+)$/);
+  if (toggleAuto) {
+    await handleToggleAutoPublish(ctx, parseInt(toggleAuto[1]!));
+    return;
+  }
+
+  // Change voice
+  const changeVoice = data.match(/^change_voice_(\d+)$/);
+  if (changeVoice) {
+    await handleVoiceChange(ctx, parseInt(changeVoice[1]!));
+    return;
+  }
+
+  // Set voice
+  const setVoice = data.match(/^set_voice_(\d+)_(.+)$/);
+  if (setVoice) {
+    await handleSetVoice(ctx, parseInt(setVoice[1]!), setVoice[2]!);
+    return;
+  }
+
+  await ctx.answerCbQuery("❓ أمر غير معروف");
 });
+
+// ─── Error handler ────────────────────────────────────────────────────────
 
 bot.catch((err, ctx) => {
-  logger.error({ err, updateType: ctx.updateType }, "Bot error");
+  logger.error({ err, update: ctx.update }, "Bot error");
 });
 
-export async function setupWebhook(baseUrl: string): Promise<void> {
-  const webhookPath = `/bot${BOT_TOKEN}`;
-  const webhookUrl = `${baseUrl}${webhookPath}`;
+// ─── Webhook & Polling ────────────────────────────────────────────────────
 
-  await bot.telegram.setWebhook(webhookUrl);
+export async function setupWebhook(webhookUrl: string): Promise<void> {
+  const BOT_TOKEN = process.env["TELEGRAM_BOT_TOKEN"]!;
+  const webhookPath = `/bot${BOT_TOKEN}`;
+  await bot.telegram.setWebhook(`${webhookUrl}${webhookPath}`);
   logger.info({ webhookUrl }, "Webhook set");
 }
 
 export async function startPolling(): Promise<void> {
   await bot.telegram.deleteWebhook();
   bot.launch();
-  logger.info("Bot started with polling");
+  logger.info("Bot polling started");
+
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
 }
