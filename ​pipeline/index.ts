@@ -1,55 +1,52 @@
-import * as path from "path";
-import * as os from "os";
-import * as fs from "fs";
 import {
   getSeries,
   getSeriesEpisodes,
   createEpisode,
   updateEpisode,
   updateSeries,
-  getNextPendingEpisode,
+  getEpisode,
+  type Series,
+  type Episode,
 } from "../db/supabase.js";
 import { generateFullScenario, generateSingleEpisode } from "./scenario.js";
-import { generateVoice } from "./voice.js";
-import {
-  generateAnimationClips,
-  combineClipsWithAudio,
-  addSubtitleOverlay,
-} from "./animation.js";
+import { generateVoice, generateVoiceEdgeTTS } from "./voice.js";
+import { generateMultipleScenes } from "./image.js";
+import { buildVideo } from "./video.js";
 import { uploadToYouTube, buildVideoDescription, isYouTubeConfigured } from "./youtube.js";
-import { cleanupFiles } from "./video.js";
 import { logger } from "../lib/logger.js";
+import * as fs from "fs";
 
 export interface PipelineResult {
-  episodeId: number;
-  videoPath?: string;
+  success: boolean;
+  episodeId?: number;
   youtubeUrl?: string;
   youtubeSkipped?: boolean;
-  success: boolean;
   error?: string;
 }
 
-// ─── Generate full scenario for a new series ───────────────────────────────
+// ─── Generate full scenario for a series ────────────────────────────────────
 
 export async function generateSeriesScenario(seriesId: number): Promise<void> {
   const series = await getSeries(seriesId);
-  if (!series) throw new Error("Series not found");
+  if (!series) throw new Error(`Series ${seriesId} not found`);
 
   logger.info({ seriesId }, "Generating full scenario");
 
   const result = await generateFullScenario(
     series.title,
     series.genre,
-    series.description || "",
-    20
+    series.description,
+    series.total_episodes
   );
 
+  // Save characters and scenario
   await updateSeries(seriesId, {
-    scenario: result.fullScenario,
     characters: result.characters,
-    total_episodes: result.episodes.length,
+    scenario: result.fullScenario,
+    total_episodes: result.episodes.length || series.total_episodes,
   });
 
+  // Create all episode records as pending
   for (const ep of result.episodes) {
     await createEpisode({
       series_id: seriesId,
@@ -60,121 +57,148 @@ export async function generateSeriesScenario(seriesId: number): Promise<void> {
     });
   }
 
-  logger.info({ seriesId, total: result.episodes.length }, "Scenario generated");
+  logger.info({ seriesId, episodeCount: result.episodes.length }, "Scenario generated");
 }
 
-// ─── Full animation pipeline for one episode ───────────────────────────────
+// ─── Generate and publish a new episode ─────────────────────────────────────
+
+export async function generateAndPublishNow(
+  seriesId: number,
+  onProgress?: (step: string) => Promise<void>
+): Promise<PipelineResult> {
+  const series = await getSeries(seriesId);
+  if (!series) return { success: false, error: "Series not found" };
+
+  try {
+    // Find next pending episode
+    const episodes = await getSeriesEpisodes(seriesId);
+    let episode = episodes.find((e) => e.status === "pending");
+
+    // If no pending episode, generate a new one
+    if (!episode) {
+      await onProgress?.("📝 كتابة سيناريو الحلقة...");
+
+      const previousSummaries = episodes
+        .filter((e) => e.status === "published")
+        .slice(-3)
+        .map((e) => e.title || "");
+
+      const episodeScript = await generateSingleEpisode(
+        series.title,
+        series.genre,
+        series.characters,
+        previousSummaries,
+        episodes.length + 1
+      );
+
+      const newEpisode = await createEpisode({
+        series_id: seriesId,
+        episode_number: episodeScript.episodeNumber,
+        title: episodeScript.title,
+        script: episodeScript.script,
+        status: "pending",
+      });
+
+      if (!newEpisode) return { success: false, error: "Failed to create episode" };
+      episode = newEpisode;
+    }
+
+    return await processEpisode(seriesId, episode.id, onProgress);
+  } catch (err) {
+    logger.error({ err, seriesId }, "generateAndPublishNow failed");
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+// ─── Process a specific episode (generate media + publish) ──────────────────
 
 export async function processEpisode(
   seriesId: number,
   episodeId: number,
   onProgress?: (step: string) => Promise<void>
 ): Promise<PipelineResult> {
+  const series = await getSeries(seriesId);
+  const episode = await getEpisode(episodeId);
+
+  if (!series || !episode) {
+    return { success: false, error: "Series or episode not found" };
+  }
+
+  await updateEpisode(episodeId, { status: "generating" });
+
   const tempFiles: string[] = [];
 
   try {
-    const series = await getSeries(seriesId);
-    const episodes = await getSeriesEpisodes(seriesId);
-    const episode = episodes.find((e) => e.id === episodeId);
+    // Step 1: Generate voice
+    await onProgress?.("🎙️ توليد الصوت...");
+    let audioPath: string;
 
-    if (!series || !episode) {
-      return { episodeId, success: false, error: "Series or episode not found" };
-    }
-
-    await updateEpisode(episodeId, { status: "generating" });
-
-    // ── Step 1: Generate voice ──────────────────────────────────────────────
-    if (onProgress) await onProgress("🎙️ جاري توليد الصوت بـ ElevenLabs...");
-    let audioPath = "";
     try {
-      audioPath = await generateVoice(episode.script, series.voice_id);
+      if (process.env["ELEVENLABS_API_KEY"]) {
+        audioPath = await generateVoice(episode.script, series.voice_id);
+      } else {
+        audioPath = await generateVoiceEdgeTTS(episode.script);
+      }
       tempFiles.push(audioPath);
       logger.info({ episodeId }, "Voice generated");
-    } catch (err) {
-      logger.warn({ err }, "Voice generation failed, video will be silent");
+    } catch (voiceErr) {
+      logger.warn({ voiceErr }, "Voice generation failed, using silent");
+      audioPath = "";
     }
 
-    // ── Step 2: Generate animated video clips ───────────────────────────────
-    if (onProgress) await onProgress("🎨 جاري توليد مقاطع الأنيميشن...");
+    // Step 2: Generate scene images
+    await onProgress?.("🎨 توليد مشاهد الأنيميشن...");
+    let imagePaths: string[] = [];
 
-    const SCENE_COUNT = 5;
-    const TARGET_DURATION = 30;
+    try {
+      imagePaths = await generateMultipleScenes(episode.script, series.characters, 4);
+      tempFiles.push(...imagePaths);
+      logger.info({ episodeId, count: imagePaths.length }, "Images generated");
+    } catch (imgErr) {
+      logger.warn({ imgErr }, "Image generation failed");
+    }
 
-    const clips = await generateAnimationClips({
-      script: episode.script,
-      characters: series.characters,
-      genre: series.genre,
-      targetDuration: TARGET_DURATION,
-      sceneCount: SCENE_COUNT,
+    // Step 3: Build video
+    await onProgress?.("🎬 تجميع الفيديو...");
+
+    const videoPath = await buildVideo({
+      imagePaths: imagePaths.length > 0 ? imagePaths : [],
+      audioPath,
     });
-
-    for (const c of clips) tempFiles.push(c.clipPath);
-
-    if (clips.length === 0) {
-      return {
-        episodeId,
-        success: false,
-        error: "فشل توليد مقاطع الأنيميشن. تحقق من HUGGINGFACE_API_KEY.",
-      };
-    }
-
-    logger.info({ episodeId, clipCount: clips.length }, "Animation clips generated");
-
-    // ── Step 3: Combine clips + audio into final video ──────────────────────
-    if (onProgress) await onProgress("🎬 جاري تجميع الفيديو مع الصوت...");
-
-    const videoPath = path.join(os.tmpdir(), `final_ep_${episodeId}_${Date.now()}.mp4`);
-
-    await combineClipsWithAudio(clips, audioPath, videoPath);
     tempFiles.push(videoPath);
 
-    logger.info({ episodeId, videoPath }, "Video assembled");
+    logger.info({ episodeId }, "Video built");
 
-    // ── Step 4: Add subtitle overlay ────────────────────────────────────────
-    if (onProgress) await onProgress("📝 جاري إضافة النصوص...");
-    let finalVideoPath = videoPath;
-    try {
-      const durations = clips.map((c) => c.duration);
-      const scenes = clips.map((c) => c.sceneText);
-      const subtitledPath = await addSubtitleOverlay(videoPath, scenes, durations);
-      if (subtitledPath !== videoPath) {
-        tempFiles.push(subtitledPath);
-        finalVideoPath = subtitledPath;
-      }
-    } catch {
-      logger.warn({ episodeId }, "Subtitle overlay failed, using video without subtitles");
-    }
+    await updateEpisode(episodeId, { status: "ready" });
 
-    await updateEpisode(episodeId, { status: "ready", duration_seconds: TARGET_DURATION });
+    // Step 4: Upload to YouTube (optional)
+    await onProgress?.("📤 رفع على يوتيوب...");
 
-    // ── Step 5: Upload to YouTube (optional) ────────────────────────────────
     if (!isYouTubeConfigured()) {
-      logger.info({ episodeId }, "YouTube not configured — episode ready, not uploaded");
-      await cleanupFiles(tempFiles.filter((f) => f !== finalVideoPath));
-      return {
-        episodeId,
-        videoPath: finalVideoPath,
-        youtubeSkipped: true,
-        success: true,
-      };
+      logger.info({ episodeId }, "YouTube not configured, skipping upload");
+      await updateEpisode(episodeId, { status: "published" });
+      await updateSeries(seriesId, {
+        episodes_generated: (series.episodes_generated || 0) + 1,
+      });
+
+      return { success: true, episodeId, youtubeSkipped: true };
     }
 
-    if (onProgress) await onProgress("☁️ جاري الرفع على يوتيوب...");
-
-    const published = episodes.filter((e) => e.status === "published");
     const description = buildVideoDescription(
       series.title,
       episode.episode_number,
       episode.title || `الحلقة ${episode.episode_number}`,
-      episode.script.slice(0, 300)
+      episode.script.slice(0, 200)
     );
 
     const uploadResult = await uploadToYouTube({
-      videoPath: finalVideoPath,
+      videoPath,
       title: `${series.title} - الحلقة ${episode.episode_number}: ${episode.title || ""}`,
       description,
-      tags: [series.title, series.genre, "أنيميشن", "ذكاء اصطناعي", "مسلسل"],
-      privacyStatus: "public",
+      tags: ["أنيميشن", "مسلسل", series.genre, "ذكاء اصطناعي"],
     });
 
     await updateEpisode(episodeId, {
@@ -185,82 +209,54 @@ export async function processEpisode(
     });
 
     await updateSeries(seriesId, {
-      episodes_generated: published.length + 1,
+      episodes_generated: (series.episodes_generated || 0) + 1,
     });
 
-    await cleanupFiles(tempFiles);
-
-    logger.info({ episodeId, videoUrl: uploadResult.videoUrl }, "Episode published to YouTube");
+    logger.info({ episodeId, youtubeUrl: uploadResult.videoUrl }, "Episode published");
 
     return {
-      episodeId,
-      videoPath: finalVideoPath,
-      youtubeUrl: uploadResult.videoUrl,
       success: true,
+      episodeId,
+      youtubeUrl: uploadResult.videoUrl,
     };
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    logger.error({ err, episodeId }, "Pipeline failed");
-
-    await updateEpisode(episodeId, { status: "failed", error_message: errorMsg });
-    await cleanupFiles(tempFiles);
-
-    return { episodeId, success: false, error: errorMsg };
+    logger.error({ err, episodeId }, "processEpisode failed");
+    await updateEpisode(episodeId, {
+      status: "failed",
+      error_message: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      success: false,
+      episodeId,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    // Cleanup temp files
+    for (const f of tempFiles) {
+      try {
+        if (f && fs.existsSync(f)) fs.unlinkSync(f);
+      } catch { /* ignore */ }
+    }
   }
 }
 
-// ─── Daily auto-publish ─────────────────────────────────────────────────────
+// ─── Daily publish job ───────────────────────────────────────────────────────
 
 export async function runDailyPublish(seriesId: number): Promise<PipelineResult | null> {
-  try {
-    const episode = await getNextPendingEpisode(seriesId);
-    if (!episode) {
-      logger.info({ seriesId }, "No pending episodes to publish");
-      return null;
-    }
-    return await processEpisode(seriesId, episode.id);
-  } catch (err) {
-    logger.error({ err, seriesId }, "Daily publish failed");
-    return null;
-  }
-}
-
-// ─── Generate + publish episode on demand ──────────────────────────────────
-
-export async function generateAndPublishNow(
-  seriesId: number,
-  onProgress?: (step: string) => Promise<void>
-): Promise<PipelineResult> {
   const series = await getSeries(seriesId);
-  if (!series) return { episodeId: 0, success: false, error: "Series not found" };
+  if (!series) return null;
 
   const episodes = await getSeriesEpisodes(seriesId);
-  const nextNumber = episodes.length + 1;
+  const readyEpisode = episodes.find((e) => e.status === "ready");
 
-  if (onProgress) await onProgress("📝 جاري كتابة سيناريو الحلقة...");
+  if (readyEpisode) {
+    return await processEpisode(seriesId, readyEpisode.id);
+  }
 
-  const previousSummaries = episodes
-    .filter((e) => e.status === "published")
-    .slice(-3)
-    .map((e) => e.title || "");
+  const pendingEpisode = episodes.find((e) => e.status === "pending");
+  if (pendingEpisode) {
+    return await processEpisode(seriesId, pendingEpisode.id);
+  }
 
-  const epScript = await generateSingleEpisode(
-    series.title,
-    series.genre,
-    series.characters,
-    previousSummaries,
-    nextNumber
-  );
-
-  const episode = await createEpisode({
-    series_id: seriesId,
-    episode_number: nextNumber,
-    title: epScript.title,
-    script: epScript.script,
-    status: "pending",
-  });
-
-  if (!episode) return { episodeId: 0, success: false, error: "Failed to create episode" };
-
-  return await processEpisode(seriesId, episode.id, onProgress);
+  return await generateAndPublishNow(seriesId);
 }
