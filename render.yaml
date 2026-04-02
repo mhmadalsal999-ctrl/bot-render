@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: clipbot-pro
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # ── Telegram ──────────────────────────────
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      # ── Supabase ──────────────────────────────
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      # ── Groq (AI captions & analysis) ─────────
+      - key: GROQ_API_KEY
+        sync: false
+      # ── YouTube Upload ─────────────────────────
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REFRESH_TOKEN
+        sync: false
+      # ── Render URL (for Webhook) ───────────────
+      - key: CALLBACK_BASE_URL
+        sync: false
+      # ── Optional: your watermark text ─────────
+      - key: WATERMARK_TEXT
+        sync: false
