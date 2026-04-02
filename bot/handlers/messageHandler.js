@@ -44,14 +44,14 @@ async function handleVideoUpload(bot, msg, userId, chatId, fileObj) {
 
   if (sizeMB > 50) {
     return bot.sendMessage(chatId,
-      `❌ *File too large* \\(${sizeMB.toFixed(0)}MB\\)\n\nMaximum allowed size is *50MB*\\.\n_For larger videos, send a YouTube link instead\\._`,
-      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
+      `❌ *File too large* (${sizeMB.toFixed(0)}MB)\n\nMaximum allowed size is *50MB*.\n_For larger videos, send a YouTube link instead._`,
+      { parse_mode: 'Markdown', ...mainKeyboard() }
     );
   }
 
   const ack = await bot.sendMessage(chatId,
-    `📥 *Receiving your video\\.\\.\\.*\n_${sizeMB.toFixed(1)}MB — just a moment\\._`,
-    { parse_mode: 'MarkdownV2' }
+    `📥 *Receiving your video...*\n_${sizeMB.toFixed(1)}MB — just a moment._`,
+    { parse_mode: 'Markdown' }
   );
 
   try {
@@ -80,13 +80,13 @@ async function handleVideoUpload(bot, msg, userId, chatId, fileObj) {
     });
 
     await bot.sendMessage(chatId,
-      `✅ *Video received\\!*\n\n` +
-      `📹 ${(msg.caption || 'Your video').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}\n` +
+      `✅ *Video received!*\n\n` +
+      `📹 ${msg.caption || 'Your video'}\n` +
       `⏱ Duration: *${durationStr}*\n` +
       `📦 Size: *${sizeMB.toFixed(1)}MB*\n\n` +
-      `⚙️ *Processing has started\\!*\n` +
-      `_I'll notify you as each step completes\\._`,
-      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
+      `⚙️ *Processing has started!*\n` +
+      `_I'll notify you as each step completes._`,
+      { parse_mode: 'Markdown', ...mainKeyboard() }
     );
 
     triggerProcessClip(clip.id).catch(e =>
@@ -97,8 +97,8 @@ async function handleVideoUpload(bot, msg, userId, chatId, fileObj) {
     await bot.deleteMessage(chatId, ack.message_id).catch(() => {});
     logger.error('MSG', `Video upload error: ${err.message}`);
     bot.sendMessage(chatId,
-      `❌ *Failed to receive video*\n\n_${err.message}_\n\nPlease try again\\.`,
-      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
+      `❌ *Failed to receive video*\n\n_${err.message}_\n\nPlease try again.`,
+      { parse_mode: 'Markdown', ...mainKeyboard() }
     );
   }
 }
