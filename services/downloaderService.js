@@ -1,32 +1,41 @@
 // ═══════════════════════════════════════════════════════════════════
-// downloaderService.js — Download YouTube video clips using yt-dlp
+// downloaderService.js — Download YouTube video clips using yt-dlp-wrap
+// Uses yt-dlp-wrap npm package (no system yt-dlp needed)
 // ═══════════════════════════════════════════════════════════════════
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import YTDlpWrap from 'yt-dlp-wrap';
 import path from 'path';
 import fs from 'fs-extra';
 import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
 
-const execAsync = promisify(exec);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMP_DIR = path.join(__dirname, '../temp');
+const YTDLP_BIN = path.join(__dirname, '../bin/yt-dlp');
 
 await fs.ensureDir(TEMP_DIR);
+await fs.ensureDir(path.join(__dirname, '../bin'));
+
+// ── Auto-download yt-dlp binary on first run ───────────────────────
+async function getYtDlp() {
+  if (!(await fs.pathExists(YTDLP_BIN))) {
+    logger.info('DOWNLOADER', 'Downloading yt-dlp binary...');
+    await YTDlpWrap.downloadFromGithub(YTDLP_BIN);
+    await fs.chmod(YTDLP_BIN, 0o755);
+    logger.success('DOWNLOADER', 'yt-dlp binary ready');
+  }
+  return new YTDlpWrap(YTDLP_BIN);
+}
 
 // ── Get video metadata (title, channel, duration) ─────────────────
 export async function getVideoInfo(url) {
   try {
-    const { stdout } = await execAsync(
-      `yt-dlp --no-playlist --print-json --skip-download "${url}"`,
-      { timeout: 30000 }
-    );
-    const info = JSON.parse(stdout.trim().split('\n')[0]);
+    const ytDlp = await getYtDlp();
+    const info = await ytDlp.getVideoInfo(url);
     return {
-      title:    info.title || 'Unknown',
-      channel:  info.uploader || info.channel || 'Unknown',
-      duration: info.duration || 0,
+      title:     info.title    || 'Unknown',
+      channel:   info.uploader || info.channel || 'Unknown',
+      duration:  info.duration || 0,
       thumbnail: info.thumbnail || null
     };
   } catch (err) {
@@ -39,7 +48,7 @@ export async function getVideoInfo(url) {
 export async function downloadClip(url, startSec, endSec) {
   await fs.ensureDir(TEMP_DIR);
 
-  const filename = `clip_${Date.now()}.mp4`;
+  const filename   = `clip_${Date.now()}.mp4`;
   const outputPath = path.join(TEMP_DIR, filename);
 
   const duration = endSec - startSec;
@@ -49,23 +58,20 @@ export async function downloadClip(url, startSec, endSec) {
 
   logger.clip(`Downloading ${url} [${startSec}s → ${endSec}s] (${duration}s)`);
 
-  // Download best quality vertical-compatible format, then cut
-  const cmd = [
-    'yt-dlp',
-    '--no-playlist',
-    '-f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"',
-    `--download-sections "*${startSec}-${endSec}"`,
-    '--force-keyframes-at-cuts',
-    '-o', `"${outputPath}"`,
-    `"${url}"`
-  ].join(' ');
+  const ytDlp = await getYtDlp();
 
   try {
-    await execAsync(cmd, { timeout: 120000 });
+    await ytDlp.execPromise([
+      url,
+      '--no-playlist',
+      '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      '--download-sections', `*${startSec}-${endSec}`,
+      '--force-keyframes-at-cuts',
+      '-o', outputPath
+    ]);
   } catch (err) {
-    // Fallback: download full then cut with ffmpeg
     logger.warn('DOWNLOADER', `Direct section download failed, trying fallback: ${err.message}`);
-    return await downloadAndCutFallback(url, startSec, endSec, outputPath);
+    return await downloadAndCutFallback(ytDlp, url, startSec, endSec, outputPath);
   }
 
   if (!(await fs.pathExists(outputPath))) {
@@ -78,23 +84,33 @@ export async function downloadClip(url, startSec, endSec) {
   return outputPath;
 }
 
-// ── Fallback: download full video then cut ─────────────────────────
-async function downloadAndCutFallback(url, startSec, endSec, outputPath) {
-  const rawPath = outputPath.replace('.mp4', '_raw.mp4');
+// ── Fallback: download full video then cut with ffmpeg ─────────────
+async function downloadAndCutFallback(ytDlp, url, startSec, endSec, outputPath) {
+  const rawPath  = outputPath.replace('.mp4', '_raw.mp4');
   const duration = endSec - startSec;
 
-  // Download
-  await execAsync(
-    `yt-dlp --no-playlist -f "best[height<=720]" -o "${rawPath}" "${url}"`,
-    { timeout: 300000 }
-  );
+  await ytDlp.execPromise([
+    url,
+    '--no-playlist',
+    '-f', 'best[height<=720]',
+    '-o', rawPath
+  ]);
 
-  // Cut with ffmpeg
-  const ffmpegStatic = (await import('ffmpeg-static')).default;
-  await execAsync(
-    `"${ffmpegStatic}" -y -ss ${startSec} -i "${rawPath}" -t ${duration} -c:v libx264 -c:a aac -avoid_negative_ts make_zero "${outputPath}"`,
-    { timeout: 120000 }
-  );
+  const { execFile } = await import('child_process');
+  const { promisify } = await import('util');
+  const execFileAsync = promisify(execFile);
+  const ffmpegStatic  = (await import('ffmpeg-static')).default;
+
+  await execFileAsync(ffmpegStatic, [
+    '-y',
+    '-ss', String(startSec),
+    '-i', rawPath,
+    '-t', String(duration),
+    '-c:v', 'libx264',
+    '-c:a', 'aac',
+    '-avoid_negative_ts', 'make_zero',
+    outputPath
+  ], { timeout: 120000 });
 
   await fs.remove(rawPath).catch(() => {});
 
