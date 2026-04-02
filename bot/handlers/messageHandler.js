@@ -1,6 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════
 // messageHandler.js — All text + video upload handling
-// Fast response: answer immediately, process in background
 // ═══════════════════════════════════════════════════════════════════
 
 import {
@@ -45,15 +44,14 @@ async function handleVideoUpload(bot, msg, userId, chatId, fileObj) {
 
   if (sizeMB > 50) {
     return bot.sendMessage(chatId,
-      `❌ *File too large* (${sizeMB.toFixed(0)}MB)\n\nMax: 50MB\n_For longer videos, send a YouTube link._`,
-      { parse_mode: 'Markdown', ...mainKeyboard() }
+      `❌ *File too large* \\(${sizeMB.toFixed(0)}MB\\)\n\nMaximum allowed size is *50MB*\\.\n_For larger videos, send a YouTube link instead\\._`,
+      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
     );
   }
 
-  // Reply immediately so user knows we got it
   const ack = await bot.sendMessage(chatId,
-    `📥 *Receiving video...*\n_${sizeMB.toFixed(1)}MB — this takes a few seconds_`,
-    { parse_mode: 'Markdown' }
+    `📥 *Receiving your video\\.\\.\\.*\n_${sizeMB.toFixed(1)}MB — just a moment\\._`,
+    { parse_mode: 'MarkdownV2' }
   );
 
   try {
@@ -82,16 +80,15 @@ async function handleVideoUpload(bot, msg, userId, chatId, fileObj) {
     });
 
     await bot.sendMessage(chatId,
-      `✅ *Video received!*\n\n` +
-      `📹 ${msg.caption || 'Your video'}\n` +
-      `⏱ Duration: ${durationStr}\n` +
-      `📦 Size: ${sizeMB.toFixed(1)}MB\n\n` +
-      `⚙️ *Processing now...*\n` +
-      `_I'll send you the finished clip when it's ready!_`,
-      { parse_mode: 'Markdown', ...mainKeyboard() }
+      `✅ *Video received\\!*\n\n` +
+      `📹 ${(msg.caption || 'Your video').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}\n` +
+      `⏱ Duration: *${durationStr}*\n` +
+      `📦 Size: *${sizeMB.toFixed(1)}MB*\n\n` +
+      `⚙️ *Processing has started\\!*\n` +
+      `_I'll notify you as each step completes\\._`,
+      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
     );
 
-    // Fire and forget — cron handles it
     triggerProcessClip(clip.id).catch(e =>
       logger.error('MSG', `triggerProcessClip: ${e.message}`)
     );
@@ -100,8 +97,8 @@ async function handleVideoUpload(bot, msg, userId, chatId, fileObj) {
     await bot.deleteMessage(chatId, ack.message_id).catch(() => {});
     logger.error('MSG', `Video upload error: ${err.message}`);
     bot.sendMessage(chatId,
-      `❌ *Failed to receive video*\n_${err.message}_\n\nTry again or send a YouTube link.`,
-      { parse_mode: 'Markdown', ...mainKeyboard() }
+      `❌ *Failed to receive video*\n\n_${err.message}_\n\nPlease try again\\.`,
+      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
     );
   }
 }
@@ -113,7 +110,7 @@ export async function handleMessage(bot, msg) {
   const chatId = msg.chat.id;
   const userId = msg.from.id.toString();
 
-  // ── Video / document upload ────────────────────────────────────
+  // ── Video / document upload ──────────────────────────────────
   const fileObj = msg.video || msg.document;
   if (fileObj) {
     const mime = fileObj.mime_type || '';
@@ -129,61 +126,65 @@ export async function handleMessage(bot, msg) {
   const state    = sd?.state     || STATES.IDLE;
   const tempData = sd?.temp_data || {};
 
-  // ── /start ────────────────────────────────────────────────────
+  // ── /start ──────────────────────────────────────────────────
   if (text === '/start') {
     await setUserState(userId, STATES.IDLE, {});
-    return bot.sendMessage(chatId, WELCOME_MSG, { parse_mode: 'Markdown', ...mainKeyboard() });
+    return bot.sendMessage(chatId, WELCOME_MSG, { parse_mode: 'MarkdownV2', ...mainKeyboard() });
   }
 
-  // ── /help ─────────────────────────────────────────────────────
-  if (text === '/help' || text === '❓ Help') {
-    return bot.sendMessage(chatId, HELP_MSG, { parse_mode: 'Markdown', ...mainKeyboard() });
+  // ── Help ────────────────────────────────────────────────────
+  if (text === '/help' || text === '💡 Help') {
+    return bot.sendMessage(chatId, HELP_MSG, { parse_mode: 'MarkdownV2', ...mainKeyboard() });
   }
 
-  // ── Cancel ────────────────────────────────────────────────────
+  // ── Cancel ──────────────────────────────────────────────────
   if (text === '/cancel' || text === '❌ Cancel') {
     await setUserState(userId, STATES.IDLE, {});
-    return bot.sendMessage(chatId, '✅ Cancelled. What would you like to do?', mainKeyboard());
-  }
-
-  // ── ✂️ New Clip ───────────────────────────────────────────────
-  if (text === '✂️ New Clip') {
-    await setUserState(userId, STATES.AWAIT_URL, {});
     return bot.sendMessage(chatId,
-      `✂️ *New Clip*\n\n` +
-      `Send me:\n` +
-      `🔗 A *YouTube link* — I'll clip the part you choose\n` +
-      `📤 A *video file* — I'll process it directly (up to 50MB)\n\n` +
-      `_Any format, any orientation — I'll handle it!_`,
-      { parse_mode: 'Markdown', ...cancelKeyboard() }
+      `✅ Cancelled\\. What would you like to do next?`,
+      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
     );
   }
 
-  // ── 📁 My Clips ───────────────────────────────────────────────
-  if (text === '📁 My Clips') {
+  // ── 🎬 New Clip ─────────────────────────────────────────────
+  if (text === '🎬 New Clip') {
+    await setUserState(userId, STATES.AWAIT_URL, {});
+    return bot.sendMessage(chatId,
+      `🎬 *New Clip*\n\n` +
+      `Send me one of the following:\n\n` +
+      `📤 *A video file* — up to 50MB, any format\n` +
+      `🔗 *A YouTube link* — I'll clip the exact part you want\n\n` +
+      `_Any orientation works — I'll handle everything\\._`,
+      { parse_mode: 'MarkdownV2', ...cancelKeyboard() }
+    );
+  }
+
+  // ── 📂 My Clips ─────────────────────────────────────────────
+  if (text === '📂 My Clips') {
     const clips = await getUserClips(userId);
     if (!clips.length) {
       return bot.sendMessage(chatId,
-        `📭 *No clips yet!*\n\nTap *✂️ New Clip* to create your first one.`,
-        { parse_mode: 'Markdown', ...mainKeyboard() }
+        `📭 *No clips yet\\!*\n\nTap *🎬 New Clip* to create your first one\\.`,
+        { parse_mode: 'MarkdownV2', ...mainKeyboard() }
       );
     }
+
     const lines = clips.slice(0, 8).map((c, i) => {
-      const s = STATUS_LABELS[c.status] || '📹';
-      const t = (c.source_title || 'Clip').slice(0, 32);
+      const s = STATUS_LABELS[c.status] || '🎬';
+      const t = (c.source_title || 'Untitled').slice(0, 30).replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
       return `${i + 1}\\. ${s} — _${t}_`;
     }).join('\n');
 
     return bot.sendMessage(chatId,
-      `📁 *My Clips* \\(${clips.length} total\\)\n\n${lines}\n\n_Tap a clip to manage it:_`,
+      `📂 *My Clips* \\(${clips.length} total\\)\n\n${lines}\n\n_Tap a clip below to manage it:_`,
       { parse_mode: 'MarkdownV2', ...clipsListKeyboard(clips) }
     );
   }
 
-  // ── 📊 Stats & Earnings ───────────────────────────────────────
-  if (text === '📊 Stats & Earnings') {
-    const clips    = await getUserClips(userId, 100);
-    const earnings = await getTotalEarnings(userId);
+  // ── 📊 My Stats ─────────────────────────────────────────────
+  if (text === '📊 My Stats') {
+    const clips     = await getUserClips(userId, 100);
+    const earnings  = await getTotalEarnings(userId);
     const published = clips.filter(c => c.status === 'published').length;
     const ready     = clips.filter(c => c.status === 'ready').length;
     const ytV  = clips.reduce((s, c) => s + (c.views_youtube   || 0), 0);
@@ -191,65 +192,74 @@ export async function handleMessage(bot, msg) {
     const igV  = clips.reduce((s, c) => s + (c.views_instagram || 0), 0);
     const total = ytV + ttV + igV;
 
-    return bot.sendMessage(chatId, [
-      `📊 *Stats & Earnings*`,
-      ``,
-      `🎬 *Clips*`,
-      `├ Total:     ${clips.length}`,
-      `├ ✅ Ready:   ${ready}`,
-      `└ 📤 Published: ${published}`,
-      ``,
-      `👁 *Views*`,
-      `├ 🎬 YouTube:   ${formatViews(ytV)}`,
-      `├ 🎵 TikTok:    ${formatViews(ttV)}`,
-      `├ 📸 Instagram: ${formatViews(igV)}`,
-      `└ 📈 Total:     *${formatViews(total)}*`,
-      ``,
-      `💰 *Estimated Earnings*`,
-      `└ $${earnings.toFixed(2)} \\(at $3 CPM\\)`
-    ].join('\n'), { parse_mode: 'Markdown', ...mainKeyboard() });
+    return bot.sendMessage(chatId,
+      `📊 *Your Stats*\n\n` +
+      `🎬 *Clips*\n` +
+      `┌ Total:      *${clips.length}*\n` +
+      `├ ✅ Ready:    *${ready}*\n` +
+      `└ 📤 Published: *${published}*\n\n` +
+      `👁 *Views*\n` +
+      `┌ 🎬 YouTube:    *${formatViews(ytV)}*\n` +
+      `├ 🎵 TikTok:     *${formatViews(ttV)}*\n` +
+      `├ 📸 Instagram:  *${formatViews(igV)}*\n` +
+      `└ 📈 Total:      *${formatViews(total)}*\n\n` +
+      `💰 *Estimated Earnings*\n` +
+      `└ *\\$${earnings.toFixed(2)}* \\(at \\$3 CPM\\)`,
+      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
+    );
   }
 
-  // ── 📺 YouTube Setup ──────────────────────────────────────────
+  // ── 📺 YouTube Setup ────────────────────────────────────────
   if (text === '📺 YouTube Setup') {
     const ch = await getYouTubeChannel(userId);
     if (ch?.is_active) {
       return bot.sendMessage(chatId,
-        `✅ *YouTube Connected*\n\n📺 Channel: *${ch.channel_title || 'Connected'}*\n\nTo reconnect, send your new Client ID:`,
-        { parse_mode: 'Markdown', ...cancelKeyboard() }
+        `✅ *YouTube Connected*\n\n` +
+        `📺 Channel: *${(ch.channel_title || 'Connected').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}*\n\n` +
+        `_To reconnect, send your new Client ID:_`,
+        { parse_mode: 'MarkdownV2', ...cancelKeyboard() }
       );
     }
     await setUserState(userId, STATES.YT_CLIENT_ID, {});
     return bot.sendMessage(chatId,
       `📺 *Connect YouTube Channel*\n\n` +
-      `*Steps:*\n` +
-      `1\\. [Google Cloud Console](https://console.cloud.google.com) → New Project\n` +
+      `*Follow these steps:*\n\n` +
+      `1\\. Go to [Google Cloud Console](https://console.cloud.google.com) → Create project\n` +
       `2\\. Enable *YouTube Data API v3*\n` +
-      `3\\. Create *OAuth 2\\.0* credentials \\(Desktop\\)\n` +
-      `4\\. [OAuth Playground](https://developers.google.com/oauthplayground) → get Refresh Token\n\n` +
-      `*Send your Client ID now:*`,
+      `3\\. Create *OAuth 2\\.0* credentials \\(Desktop app\\)\n` +
+      `4\\. Use [OAuth Playground](https://developers.google.com/oauthplayground) to get a Refresh Token\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━\n` +
+      `*Send your Client ID to begin:*`,
       { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...cancelKeyboard() }
     );
   }
 
-  // ── STATE: Awaiting YouTube URL ───────────────────────────────
+  // ── STATE: Awaiting YouTube URL ──────────────────────────────
   if (state === STATES.AWAIT_URL) {
     if (!isValidYouTubeUrl(text)) {
       return bot.sendMessage(chatId,
-        `❌ That's not a valid YouTube link.\n\nTry:\n\`https://youtube.com/watch?v=...\`\n\n_Or just upload a video file directly!_ 📤`,
-        { parse_mode: 'Markdown' }
+        `❌ *Invalid link*\n\n` +
+        `That doesn't look like a YouTube URL\\.\n\n` +
+        `*Example:*\n\`https://youtube.com/watch?v=...\`\n\n` +
+        `_Or just send a video file directly\\! 📤_`,
+        { parse_mode: 'MarkdownV2' }
       );
     }
 
-    const loading = await bot.sendMessage(chatId, '🔍 _Fetching video info..._', { parse_mode: 'Markdown' });
+    const loading = await bot.sendMessage(chatId,
+      `🔍 _Fetching video info\\.\\.\\._`,
+      { parse_mode: 'MarkdownV2' }
+    );
 
     try {
       const info = await getVideoInfo(text);
       await bot.deleteMessage(chatId, loading.message_id).catch(() => {});
 
-      const durStr = info.duration
-        ? `⏱ Duration: ${Math.floor(info.duration/60)}m ${Math.floor(info.duration%60)}s`
-        : '';
+      const mins = Math.floor((info.duration || 0) / 60);
+      const secs = Math.floor((info.duration || 0) % 60);
+      const durStr = info.duration ? `⏱ *${mins}m ${secs}s*` : '';
+      const safeTitle = (info.title || '').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+      const safeCh    = (info.channel || '').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 
       await setUserState(userId, STATES.AWAIT_START, {
         url: text, title: info.title,
@@ -257,47 +267,52 @@ export async function handleMessage(bot, msg) {
       });
 
       return bot.sendMessage(chatId,
-        `✅ *Video Found!*\n\n` +
-        `📹 *${info.title}*\n` +
-        `📺 ${info.channel}\n${durStr}\n\n` +
+        `✅ *Video found\\!*\n\n` +
+        `📹 *${safeTitle}*\n` +
+        `📺 ${safeCh}\n` +
+        `${durStr}\n\n` +
         `*Enter the start time of your clip:*\n` +
-        `_Examples: \`2:30\` or \`150\` (seconds)_`,
-        { parse_mode: 'Markdown', ...cancelKeyboard() }
+        `_Example: \`2:30\` or \`150\` \\(seconds\\)_`,
+        { parse_mode: 'MarkdownV2', ...cancelKeyboard() }
       );
     } catch (err) {
       await bot.deleteMessage(chatId, loading.message_id).catch(() => {});
       return bot.sendMessage(chatId,
-        `❌ Couldn't load video info.\n_${err.message}_\n\nMake sure the video is public.`,
-        { parse_mode: 'Markdown' }
+        `❌ *Couldn't fetch video info*\n\n_${err.message}_\n\nMake sure the video is public\\.`,
+        { parse_mode: 'MarkdownV2' }
       );
     }
   }
 
-  // ── STATE: Awaiting start time ────────────────────────────────
+  // ── STATE: Awaiting start time ───────────────────────────────
   if (state === STATES.AWAIT_START) {
     const startSec = parseTimeToSeconds(text);
     if (startSec === null || startSec < 0) {
       return bot.sendMessage(chatId,
-        `❌ Invalid format. Use \`2:30\` or \`150\``, { parse_mode: 'Markdown' }
+        `❌ *Invalid format*\n\nUse \`2:30\` or \`150\` \\(seconds\\)\\.`,
+        { parse_mode: 'MarkdownV2' }
       );
     }
     const total = tempData.total_duration || 0;
     if (total && startSec >= total) {
       return bot.sendMessage(chatId,
-        `❌ Start time (${startSec}s) is beyond video length (${Math.round(total)}s).`
+        `❌ Start time \\(${startSec}s\\) is beyond the video length \\(${Math.round(total)}s\\)\\.`,
+        { parse_mode: 'MarkdownV2' }
       );
     }
+
     await setUserState(userId, STATES.AWAIT_QUALITY, { ...tempData, start_sec: startSec });
 
-    const mm = String(Math.floor(startSec/60)).padStart(2,'0');
-    const ss = String(startSec % 60).padStart(2,'0');
+    const mm = String(Math.floor(startSec / 60)).padStart(2, '0');
+    const ss = String(startSec % 60).padStart(2, '0');
+
     return bot.sendMessage(chatId,
-      `⏱ *Start:* ${mm}:${ss}\n\n*Choose clip duration:*`,
-      { parse_mode: 'Markdown', ...durationKeyboard() }
+      `⏱ *Start time:* \`${mm}:${ss}\`\n\n*Choose clip duration:*`,
+      { parse_mode: 'MarkdownV2', ...durationKeyboard() }
     );
   }
 
-  // ── STATE: Awaiting TikTok link ───────────────────────────────
+  // ── STATE: Awaiting TikTok link ──────────────────────────────
   if (state === STATES.AWAIT_TT_LINK) {
     const clipId = tempData.clip_id;
     if (clipId && text.includes('tiktok')) {
@@ -305,14 +320,17 @@ export async function handleMessage(bot, msg) {
       await updateClip(parseInt(clipId), { tiktok_url: text, status: 'published' });
       await setUserState(userId, STATES.IDLE, {});
       return bot.sendMessage(chatId,
-        `✅ *TikTok link saved!*\n\nViews will be tracked automatically.`,
-        { parse_mode: 'Markdown', ...mainKeyboard() }
+        `✅ *TikTok link saved\\!*\n\n_Views will be tracked automatically\\._`,
+        { parse_mode: 'MarkdownV2', ...mainKeyboard() }
       );
     }
-    return bot.sendMessage(chatId, `❌ That doesn't look like a TikTok link. Try again:`);
+    return bot.sendMessage(chatId,
+      `❌ That doesn't look like a TikTok link\\. Please try again:`,
+      { parse_mode: 'MarkdownV2' }
+    );
   }
 
-  // ── STATE: Awaiting Instagram link ────────────────────────────
+  // ── STATE: Awaiting Instagram link ───────────────────────────
   if (state === STATES.AWAIT_IG_LINK) {
     const clipId = tempData.clip_id;
     if (clipId && (text.includes('instagram') || text.includes('instagr.am'))) {
@@ -320,47 +338,61 @@ export async function handleMessage(bot, msg) {
       await updateClip(parseInt(clipId), { instagram_url: text, status: 'published' });
       await setUserState(userId, STATES.IDLE, {});
       return bot.sendMessage(chatId,
-        `✅ *Instagram link saved!*\n\nViews will be tracked automatically.`,
-        { parse_mode: 'Markdown', ...mainKeyboard() }
+        `✅ *Instagram link saved\\!*\n\n_Views will be tracked automatically\\._`,
+        { parse_mode: 'MarkdownV2', ...mainKeyboard() }
       );
     }
-    return bot.sendMessage(chatId, `❌ Doesn't look like an Instagram link. Try again:`);
+    return bot.sendMessage(chatId,
+      `❌ That doesn't look like an Instagram link\\. Please try again:`,
+      { parse_mode: 'MarkdownV2' }
+    );
   }
 
-  // ── STATE: YouTube OAuth ──────────────────────────────────────
+  // ── STATE: YouTube OAuth ─────────────────────────────────────
   if (state === STATES.YT_CLIENT_ID) {
-    if (text.length < 10) return bot.sendMessage(chatId, '❌ Invalid Client ID. Try again:');
+    if (text.length < 10) return bot.sendMessage(chatId, '❌ Invalid Client ID\\. Try again:', { parse_mode: 'MarkdownV2' });
     await setUserState(userId, STATES.YT_CLIENT_SECRET, { ...tempData, client_id: text });
-    return bot.sendMessage(chatId, '✅ Got it!\n\n*Now send your Client Secret:*', { parse_mode: 'Markdown' });
+    return bot.sendMessage(chatId,
+      `✅ *Client ID saved\\!*\n\n*Now send your Client Secret:*`,
+      { parse_mode: 'MarkdownV2' }
+    );
   }
 
   if (state === STATES.YT_CLIENT_SECRET) {
-    if (text.length < 5) return bot.sendMessage(chatId, '❌ Invalid. Try again:');
+    if (text.length < 5) return bot.sendMessage(chatId, '❌ Invalid\\. Try again:', { parse_mode: 'MarkdownV2' });
     await setUserState(userId, STATES.YT_REFRESH_TOKEN, { ...tempData, client_secret: text });
-    return bot.sendMessage(chatId, '✅ Got it!\n\n*Now send your Refresh Token:*', { parse_mode: 'Markdown' });
+    return bot.sendMessage(chatId,
+      `✅ *Client Secret saved\\!*\n\n*Now send your Refresh Token:*`,
+      { parse_mode: 'MarkdownV2' }
+    );
   }
 
   if (state === STATES.YT_REFRESH_TOKEN) {
-    if (text.length < 10) return bot.sendMessage(chatId, '❌ Invalid token. Try again:');
-    const creds = { client_id: tempData.client_id, client_secret: tempData.client_secret, refresh_token: text };
-    const loading = await bot.sendMessage(chatId, '🔍 _Verifying credentials..._', { parse_mode: 'Markdown' });
+    if (text.length < 10) return bot.sendMessage(chatId, '❌ Invalid token\\. Try again:', { parse_mode: 'MarkdownV2' });
+    const creds   = { client_id: tempData.client_id, client_secret: tempData.client_secret, refresh_token: text };
+    const loading = await bot.sendMessage(chatId, '🔍 _Verifying credentials\\.\\.\\._', { parse_mode: 'MarkdownV2' });
     const verify  = await verifyYouTubeCredentials(creds);
     await bot.deleteMessage(chatId, loading.message_id).catch(() => {});
 
     if (!verify.valid) {
       return bot.sendMessage(chatId,
-        `❌ *Invalid credentials*\n_${verify.error}_\n\nStart over: /start`,
-        { parse_mode: 'Markdown' }
+        `❌ *Invalid credentials*\n\n_${verify.error}_\n\nPlease start over: /start`,
+        { parse_mode: 'MarkdownV2' }
       );
     }
+
     await saveYouTubeChannel(userId, {
       ...creds, channel_id: verify.channelId,
       channel_title: verify.channelTitle, is_active: true
     });
     await setUserState(userId, STATES.IDLE, {});
+
+    const safeTitle = (verify.channelTitle || '').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
     return bot.sendMessage(chatId,
-      `✅ *YouTube Connected!*\n\n📺 *${verify.channelTitle}*\n\nI can now auto-upload your clips to Shorts!`,
-      { parse_mode: 'Markdown', ...mainKeyboard() }
+      `✅ *YouTube Connected\\!*\n\n` +
+      `📺 *${safeTitle}*\n\n` +
+      `_Your clips will now auto\\-upload to YouTube Shorts\\._`,
+      { parse_mode: 'MarkdownV2', ...mainKeyboard() }
     );
   }
 }
