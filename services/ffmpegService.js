@@ -68,7 +68,7 @@ export async function detectOrientation(filePath) {
 
 // Output resolution map
 const RESOLUTIONS = {
-  1080: { w: 1080, h: 1920, crf: 18, preset: 'fast',  bitrate: '4000k', audio: '192k' },
+  1080: { w: 1080, h: 1920, crf: 23, preset: 'ultrafast', bitrate: '2000k', audio: '128k' },
   1440: { w: 1440, h: 2560, crf: 16, preset: 'slow',  bitrate: '8000k', audio: '320k' },
   2160: { w: 2160, h: 3840, crf: 14, preset: 'slow',  bitrate: '20000k', audio: '320k' }
 };
@@ -112,8 +112,8 @@ export async function convertToVertical(inputPath, targetRes = 1080) {
         '-profile:v', 'high',
         '-level', '5.2',
         '-b:v', res.bitrate,
-        '-maxrate', String(parseInt(res.bitrate) * 1.25) + 'k',
-        '-bufsize', String(parseInt(res.bitrate) * 2) + 'k',
+        '-maxrate', String(Math.round(parseInt(res.bitrate) * 1.25)) + 'k',
+        '-bufsize', String(Math.round(parseInt(res.bitrate) * 2)) + 'k',
         '-c:a', 'aac',
         '-b:a', res.audio,
         '-ar', '48000',
